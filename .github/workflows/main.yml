@@ -1,0 +1,67 @@
+name: RDP via Cloudflared
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+
+      - name: Enable RDP & Create User
+        shell: powershell
+        run: |
+          # Enable RDP
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          # Generate 12-character password
+          $password = -join ((65..90)+(97..122)+(48..57) | Get-Random -Count 12 | % {[char]$_})
+
+          # Create RDP user
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+              net user RDP $password
+          } else {
+              net user RDP $password /add
+              net localgroup Administrators RDP /add
+              net localgroup "Remote Desktop Users" RDP /add
+          }
+
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Download Cloudflared
+        shell: powershell
+        run: |
+          $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+          Invoke-WebRequest $url -OutFile "C:\cloudflared.exe"
+          Write-Host "Cloudflared downloaded."
+
+      - name: Start Cloudflare Tunnel
+        shell: powershell
+        env:
+          CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+        run: |
+          if (-not $env:CF_TUNNEL_TOKEN) { Write-Error "CF_TUNNEL_TOKEN missing"; exit 1 }
+
+          Start-Process -NoNewWindow -FilePath "C:\cloudflared.exe" `
+            -ArgumentList "tunnel run --token $env:CF_TUNNEL_TOKEN"
+
+          Start-Sleep -Seconds 10
+          Write-Host "Tunnel started."
+
+      - name: Show RDP Info & Keep Alive
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "====== RDP READY ======"
+          Write-Host "Address: your-subdomain.yourdomain.com"
+          Write-Host "Port: 3389"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $env:RDP_PASS"
+          Write-Host "======================="
+          Write-Host ""
+
+          while ($true) { Start-Sleep 300 }
