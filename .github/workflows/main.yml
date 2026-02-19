@@ -1,4 +1,4 @@
-name: RDP via Cloudflared
+name: Dynamic RDP via Cloudflared
 
 on:
   workflow_dispatch:
@@ -39,25 +39,41 @@ jobs:
           Invoke-WebRequest $url -OutFile "C:\cloudflared.exe"
           Write-Host "Cloudflared downloaded."
 
-      - name: Start Cloudflare Tunnel
+      - name: Start Cloudflare Tunnel (Dynamic Hostname)
         shell: powershell
         env:
           CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
         run: |
           if (-not $env:CF_TUNNEL_TOKEN) { Write-Error "CF_TUNNEL_TOKEN missing"; exit 1 }
 
+          # Start tunnel in background
           Start-Process -NoNewWindow -FilePath "C:\cloudflared.exe" `
             -ArgumentList "tunnel run --token $env:CF_TUNNEL_TOKEN"
 
-          Start-Sleep -Seconds 10
-          Write-Host "Tunnel started."
+          Start-Sleep -Seconds 8
+
+          # Wait for tunnel info file to appear
+          $tunnelInfo = "$env:USERPROFILE\.cloudflared\tunnel.json"
+          $retries = 0
+          while (-not (Test-Path $tunnelInfo) -and $retries -lt 10) {
+              Start-Sleep -Seconds 2
+              $retries++
+          }
+
+          if (-not (Test-Path $tunnelInfo)) { Write-Error "Tunnel info not found"; exit 1 }
+
+          $json = Get-Content $tunnelInfo | ConvertFrom-Json
+          $publicHost = $json.name + ".trycloudflare.com"
+
+          echo "CF_PUBLIC_HOST=$publicHost" >> $env:GITHUB_ENV
+          Write-Host "Detected Cloudflare public host: $publicHost"
 
       - name: Show RDP Info & Keep Alive
         shell: powershell
         run: |
           Write-Host ""
           Write-Host "====== RDP READY ======"
-          Write-Host "Address: your-subdomain.yourdomain.com"
+          Write-Host "Address: $env:CF_PUBLIC_HOST"
           Write-Host "Port: 3389"
           Write-Host "Username: RDP"
           Write-Host "Password: $env:RDP_PASS"
